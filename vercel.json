@@ -1,7 +1,11 @@
 {
   "version": 2,
-  "routes": [
-    { "src": "/api/img", "dest": "/api/img.js" },
-    { "src": "/(.*)", "dest": "/index.html" }
+  "functions": {
+    "api/img.js": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "rewrites": [
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
