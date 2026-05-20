@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- Tell Firefox not to upgrade HTTP images to HTTPS (local network server has no SSL) -->
+<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests: off">
 <meta name="referrer" content="no-referrer">
 <title>Walton Refrigerator Color Viewer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -506,25 +507,10 @@
 <script>
 const IMG_BASE = 'http://192.168.118.136/resources/ref_color/';
 
+// Build image URL from color code: e.g. M199-GD → M199-GD.JPG
 function imgUrl(colorCode) {
   if (!colorCode || colorCode === 'N/A') return '';
   return IMG_BASE + colorCode + '.JPG';
-}
-
-function setImgSrc(imgEl, colorCode, loaderId) {
-  const hide = () => { if (loaderId) hideLoader(loaderId); };
-  const url = imgUrl(colorCode);
-  if (!url) { hide(); imgEl.style.display = 'none'; return; }
-  imgEl.onload  = () => { hide(); imgEl.style.display = 'block'; };
-  imgEl.onerror = () => {
-    if (imgEl.src.endsWith('.JPG')) {
-      imgEl.src = IMG_BASE + colorCode + '.jpg';
-      imgEl.onerror = () => { hide(); imgEl.style.display = 'none'; };
-    } else {
-      hide(); imgEl.style.display = 'none';
-    }
-  };
-  imgEl.src = url;
 }
 
 function getFamily(code) {
@@ -707,23 +693,14 @@ function populateLegend() {
     if (!famMap.has(g.family)) famMap.set(g.family, { qty: 0, sample: g.colorCode });
     famMap.get(g.family).qty += g.qty;
   }
-  const entries = [...famMap.entries()].sort();
-  document.getElementById('legendGrid').innerHTML = entries.map(([fam, info]) => {
-    const safeId = 'leg-' + fam.replace(/[^a-z0-9]/gi, '_');
+  document.getElementById('legendGrid').innerHTML = [...famMap.entries()].sort().map(([fam, info]) => {
+    const url = imgUrl(info.sample);
     return `<div class="legend-pill${activeFamily === fam ? ' active' : ''}" onclick="toggleFamily('${fam}')">
-      <div class="legend-thumb"><img id="${safeId}" alt="" referrerpolicy="no-referrer" style="opacity:0" /></div>
+      <div class="legend-thumb"><img src="${url}" alt="" referrerpolicy="no-referrer" onerror="this.style.opacity=0" /></div>
       <span class="legend-code">${fam}</span>
       <span class="legend-count">&nbsp;(${info.qty})</span>
     </div>`;
   }).join('');
-  entries.forEach(([fam, info]) => {
-    const safeId = 'leg-' + fam.replace(/[^a-z0-9]/gi, '_');
-    const imgEl = document.getElementById(safeId);
-    if (!imgEl) return;
-    imgEl.onload = () => { imgEl.style.opacity = '1'; };
-    imgEl.onerror = () => {};
-    imgEl.src = imgUrl(info.sample);
-  });
 }
 
 function populateFamilyFilter() {
@@ -786,19 +763,25 @@ function setView(v) {
 }
 
 // ── Grid ──
-// ── Grid ──
 function renderGrid() {
   const el = document.getElementById('gridView');
-  if (!filteredGroups.length) { el.innerHTML = '<div class="empty-state"><span>🔍</span>No results match your filters.</div>'; return; }
+  if (!filteredGroups.length) { el.innerHTML = '<div class="empty-state"><span>🔍</span>No refrigerators match your filters.</div>'; return; }
   el.innerHTML = filteredGroups.map((g, i) => {
+    const url = imgUrl(g.colorCode);
     return `<div class="refrig-card">
       <div class="color-img-wrap" onclick="openModal(${i})">
+        ${url ? `
         <div class="img-loader" id="loader-${i}">
           <div class="spinner-ring"></div>
-          <div class="spinner-dots"><span></span><span></span><span></span><span></span></div>
+          <div class="spinner-dots">
+            <span></span><span></span><span></span><span></span>
+          </div>
           <div class="spinner-label">Loading color</div>
         </div>
-        <img id="gimg-${i}" alt="${g.colorCode}" style="display:none" referrerpolicy="no-referrer" />
+        <img src="${url}" alt="${g.colorCode}"
+          onload="hideLoader('loader-${i}')"
+          onerror="hideLoader('loader-${i}');handleImgErr(this,'${g.colorCode}')"
+          referrerpolicy="no-referrer" />` : ''}
         <div class="color-code-badge">${g.colorCode}</div>
         <button class="card-fullscreen-btn" onclick="event.stopPropagation();openCardLightbox(${i})" title="View full image">⛶</button>
       </div>
@@ -812,10 +795,6 @@ function renderGrid() {
       </div>
     </div>`;
   }).join('');
-  filteredGroups.forEach((g, i) => {
-    const imgEl = document.getElementById(`gimg-${i}`);
-    if (imgEl) setImgSrc(imgEl, g.colorCode, `loader-${i}`);
-  });
 }
 
 function hideLoader(id) {
@@ -824,6 +803,7 @@ function hideLoader(id) {
 }
 
 function handleImgErr(imgEl, code) {
+  // Try lowercase .jpg fallback
   if (imgEl.src.endsWith('.JPG')) {
     imgEl.src = IMG_BASE + code + '.jpg';
     imgEl.onerror = () => { imgEl.style.display = 'none'; };
@@ -835,12 +815,16 @@ function renderTable() {
   const tbody = document.getElementById('tableBody');
   if (!filteredGroups.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--muted)">No results.</td></tr>'; return; }
   tbody.innerHTML = filteredGroups.map((g, i) => {
-    const oldest = oldestDate(g.units);
+    const url     = imgUrl(g.colorCode);
+    const oldest  = oldestDate(g.units);
     return `<tr onclick="openModal(${i})">
       <td>
         <div class="tbl-img-wrap">
           <div class="tbl-loader" id="tbl-loader-${i}"><div class="mini-ring"></div></div>
-          <img id="timg-${i}" class="tbl-img" alt="${g.colorCode}" style="display:none" referrerpolicy="no-referrer" />
+          <img class="tbl-img" src="${url}" alt="${g.colorCode}"
+            onload="hideLoader('tbl-loader-${i}')"
+            onerror="hideLoader('tbl-loader-${i}');handleImgErr(this,'${g.colorCode}')"
+            referrerpolicy="no-referrer" />
         </div>
       </td>
       <td><span class="cc-pill">${g.colorCode}</span></td>
@@ -850,10 +834,6 @@ function renderTable() {
       <td style="font-size:0.78rem;color:var(--muted)">${oldest}</td>
     </tr>`;
   }).join('');
-  filteredGroups.forEach((g, i) => {
-    const imgEl = document.getElementById(`timg-${i}`);
-    if (imgEl) setImgSrc(imgEl, g.colorCode, `tbl-loader-${i}`);
-  });
 }
 
 let tblSortDir = 1;
@@ -889,23 +869,26 @@ function openLightboxFromModal() {
 }
 
 function openModal(idx) {
-  const g = filteredGroups[idx];
+  const g   = filteredGroups[idx];
   currentModalGroup = g;
+  const url = imgUrl(g.colorCode);
 
-  const mi     = document.getElementById('modalImg');
+  const mi = document.getElementById('modalImg');
   const loader = document.getElementById('modalImgLoader');
+
+  // Show loader, hide image until loaded
   loader.style.display = 'flex';
   mi.style.display = 'none';
-  mi.src = '';
 
-  const url = imgUrl(g.colorCode);
-  if (url) {
-    mi.onload  = () => { loader.style.display = 'none'; mi.style.display = 'block'; };
+  mi.onload = () => { loader.style.display = 'none'; mi.style.display = 'block'; };
+  mi.onerror = () => {
+    handleImgErr(mi, g.colorCode);
+    // After fallback attempt, hide loader regardless
+    mi.onload = () => { loader.style.display = 'none'; mi.style.display = 'block'; };
     mi.onerror = () => { loader.style.display = 'none'; };
-    mi.src = url;
-  } else {
-    loader.style.display = 'none';
-  }
+  };
+
+  if (url) { mi.src = url; } else { loader.style.display = 'none'; }
 
   document.getElementById('modalColorCode').textContent   = g.colorCode;
   document.getElementById('modalColorFamily').textContent = g.family;
