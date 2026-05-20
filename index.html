@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- Tell Firefox not to upgrade HTTP images to HTTPS (local network server has no SSL) -->
-<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests: off">
 <meta name="referrer" content="no-referrer">
 <title>Walton Refrigerator Color Viewer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -507,46 +506,32 @@
 <script>
 const IMG_BASE = 'http://192.168.118.136/resources/ref_color/';
 
-// When served over HTTPS (Vercel), all browsers block http:// image requests.
-// We use fetch+blob to load images, bypassing the mixed-content restriction.
-// Users must be on the local network to reach 192.168.118.136.
-const needsBlobLoad = (location.protocol === 'https:') || navigator.userAgent.toLowerCase().includes('firefox');
-
-// Cache: colorCode -> blob URL or "error"
-const blobCache = new Map();
+// Use Vercel proxy (/api/img?code=X) when on HTTPS to avoid mixed-content blocks.
+// Fall back to direct URL when running locally over HTTP.
+const useProxy = (location.protocol === 'https:');
 
 function imgUrl(colorCode) {
   if (!colorCode || colorCode === 'N/A') return '';
-  return IMG_BASE + colorCode + '.JPG';
-}
-
-function loadImgBlob(imgEl, colorCode, onDone) {
-  if (!colorCode || colorCode === 'N/A') { onDone && onDone(false); return; }
-  if (blobCache.has(colorCode)) {
-    const cached = blobCache.get(colorCode);
-    if (cached === 'error') { onDone && onDone(false); return; }
-    imgEl.src = cached; onDone && onDone(true); return;
-  }
-  const tryFetch = url => fetch(url, { mode: 'no-cors', cache: 'force-cache' })
-    .then(r => r.blob()).then(b => { if (!b || b.size === 0) throw new Error('empty'); return URL.createObjectURL(b); });
-  tryFetch(IMG_BASE + colorCode + '.JPG')
-    .catch(() => tryFetch(IMG_BASE + colorCode + '.jpg'))
-    .then(blobUrl => { blobCache.set(colorCode, blobUrl); imgEl.src = blobUrl; onDone && onDone(true); })
-    .catch(() => { blobCache.set(colorCode, 'error'); onDone && onDone(false); });
+  return useProxy
+    ? `/api/img?code=${encodeURIComponent(colorCode)}`
+    : IMG_BASE + colorCode + '.JPG';
 }
 
 function setImgSrc(imgEl, colorCode, loaderId) {
   const hide = () => { if (loaderId) hideLoader(loaderId); };
-  if (needsBlobLoad) {
-    loadImgBlob(imgEl, colorCode, ok => {
-      hide();
-      imgEl.style.display = ok ? 'block' : 'none';
-    });
-  } else {
-    imgEl.onload  = () => { hide(); imgEl.style.display = 'block'; };
-    imgEl.onerror = () => { hide(); handleImgErr(imgEl, colorCode); };
-    imgEl.src = imgUrl(colorCode);
-  }
+  const url = imgUrl(colorCode);
+  if (!url) { hide(); imgEl.style.display = 'none'; return; }
+  imgEl.onload  = () => { hide(); imgEl.style.display = 'block'; };
+  imgEl.onerror = () => {
+    // On direct HTTP, try lowercase .jpg fallback
+    if (!useProxy && imgEl.src.endsWith('.JPG')) {
+      imgEl.src = IMG_BASE + colorCode + '.jpg';
+      imgEl.onerror = () => { hide(); imgEl.style.display = 'none'; };
+    } else {
+      hide(); imgEl.style.display = 'none';
+    }
+  };
+  imgEl.src = url;
 }
 
 function getFamily(code) {
@@ -738,17 +723,13 @@ function populateLegend() {
       <span class="legend-count">&nbsp;(${info.qty})</span>
     </div>`;
   }).join('');
-  // Load legend thumbnails
   entries.forEach(([fam, info]) => {
     const safeId = 'leg-' + fam.replace(/[^a-z0-9]/gi, '_');
     const imgEl = document.getElementById(safeId);
     if (!imgEl) return;
-    if (needsBlobLoad) {
-      loadImgBlob(imgEl, info.sample, ok => { if (ok) imgEl.style.opacity = '1'; });
-    } else {
-      imgEl.onload = () => { imgEl.style.opacity = '1'; };
-      imgEl.src = imgUrl(info.sample);
-    }
+    imgEl.onload = () => { imgEl.style.opacity = '1'; };
+    imgEl.onerror = () => {};
+    imgEl.src = imgUrl(info.sample);
   });
 }
 
@@ -924,16 +905,13 @@ function openModal(idx) {
   mi.style.display = 'none';
   mi.src = '';
 
-  if (needsBlobLoad) {
-    loadImgBlob(mi, g.colorCode, ok => {
-      loader.style.display = 'none';
-      mi.style.display = ok ? 'block' : 'none';
-    });
-  } else {
+  const url = imgUrl(g.colorCode);
+  if (url) {
     mi.onload  = () => { loader.style.display = 'none'; mi.style.display = 'block'; };
-    mi.onerror = () => { handleImgErr(mi, g.colorCode); mi.onload = () => { loader.style.display = 'none'; mi.style.display = 'block'; }; mi.onerror = () => { loader.style.display = 'none'; }; };
-    const url = imgUrl(g.colorCode);
-    if (url) { mi.src = url; } else { loader.style.display = 'none'; }
+    mi.onerror = () => { loader.style.display = 'none'; };
+    mi.src = url;
+  } else {
+    loader.style.display = 'none';
   }
 
   document.getElementById('modalColorCode').textContent   = g.colorCode;
